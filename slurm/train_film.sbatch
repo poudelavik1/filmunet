@@ -1,0 +1,63 @@
+#!/bin/bash
+#SBATCH --job-name=film_unet
+#SBATCH --partition=ASL-gpu
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --gres=gpu:1
+#SBATCH --mem=32G
+#SBATCH --time=2-00:00:00
+#SBATCH --output=logs/%x_%j.out
+#SBATCH --error=logs/%x_%j.err
+
+set -euo pipefail
+cd "$SLURM_SUBMIT_DIR"
+: "${DATASET:?Submit using scripts/submit.sh with the dataset path}"
+: "${OUTPUT_DIR:?OUTPUT_DIR must be set by the submission script}"
+# As in pgat-length: the login node's /opt/miniconda3 is not on the compute node,
+# so put the environment on PATH instead of activating it.
+ENV_DIR="${ENV_DIR:-$HOME/.conda/envs/${ENV_NAME:-swinunet}}"
+test -x "$ENV_DIR/bin/python" || { echo "Conda environment not found: $ENV_DIR" >&2; exit 1; }
+export PATH="$ENV_DIR/bin:$PATH"
+export LD_LIBRARY_PATH="$ENV_DIR/lib:${LD_LIBRARY_PATH:-}"
+export OMP_NUM_THREADS=1
+export MPLBACKEND=Agg
+export PYTHONUNBUFFERED=1
+mkdir -p "$OUTPUT_DIR"
+nvidia-smi
+python - <<'PY'
+import torch
+assert torch.cuda.is_available(), 'CUDA unavailable: check the GPU driver and PyTorch wheel compatibility'
+print('PyTorch:', torch.__version__, 'CUDA build:', torch.version.cuda)
+print('GPU:', torch.cuda.get_device_name(0))
+# Verify actual CUDA execution, not just device discovery.
+print('CUDA tensor check:', (torch.ones(1, device='cuda') + 1).item())
+PY
+# The folder is a Git checkout only if it was cloned rather than copied to the server.
+git rev-parse HEAD > "$OUTPUT_DIR/git_commit.txt" 2>/dev/null || echo "not a Git checkout" > "$OUTPUT_DIR/git_commit.txt"
+python -m pip freeze > "$OUTPUT_DIR/packages.txt"
+args=("$DATASET" --output "$OUTPUT_DIR")
+[[ -z "${EPOCHS:-}" ]] || args+=(--epochs "$EPOCHS")
+[[ -z "${BATCH_SIZE:-}" ]] || args+=(--batch-size "$BATCH_SIZE")
+[[ -z "${WORKERS:-}" ]] || args+=(--workers "$WORKERS")
+[[ -z "${SELECT_PATTERN:-}" ]] || args+=(--select-pattern "$SELECT_PATTERN")
+[[ -z "${TARGET_WEIGHT:-}" ]] || args+=(--target-weight "$TARGET_WEIGHT")
+[[ -z "${LEARNING_RATE:-}" ]] || args+=(--learning-rate "$LEARNING_RATE")
+[[ -z "${LABEL_TOLERANCE:-}" ]] || args+=(--label-tolerance "$LABEL_TOLERANCE")
+[[ -z "${INIT_WEIGHTS:-}" ]] || args+=(--init-weights "$INIT_WEIGHTS")
+[[ -z "${SAVE_PREDICTIONS:-}" ]] || args+=(--save-predictions "$SAVE_PREDICTIONS")
+# GSD conditioning and augmentation.
+[[ -z "${ENCODER:-}" ]] || args+=(--encoder "$ENCODER")
+[[ -z "${GSD_CSV:-}" ]] || args+=(--gsd-csv "$GSD_CSV")
+[[ -z "${AUG_PRESET:-}" ]] || args+=(--aug-preset "$AUG_PRESET")
+[[ -z "${LOSS:-}" ]] || args+=(--loss "$LOSS")
+[[ "${NO_FILM:-0}" != 1 ]] || args+=(--no-film)
+[[ "${FILM_SKIPS:-0}" != 1 ]] || args+=(--film-skips)
+[[ "${GSD_SANITY_CHECK:-1}" != 1 ]] || args+=(--gsd-sanity-check)
+if [[ "${RESUME:-0}" == 1 ]]; then
+    test -f "$OUTPUT_DIR/last.pt" || { echo "Resume checkpoint missing" >&2; exit 1; }
+    args+=(--resume)
+fi
+# Run in the batch step, as in the ASL GPU example. Since Slurm 22.05 an srun
+# step ignores --cpus-per-task and would leave the data workers a single core.
+python -u scripts/train.py "${args[@]}"

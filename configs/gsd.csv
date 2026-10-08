@@ -1,0 +1,15 @@
+pattern,gsd_mm_per_px
+# Ground sampling distance of each source, in mm per pixel. pattern is a regular expression
+# searched in the image file name; the first matching row wins and a file without a match has
+# an unknown GSD. Write [0-9] rather than \d: scripts/submit.sh checks the patterns with grep.
+# The tiles were cut at the native resolution of their orthomosaic, so they have its pixel size.
+# EH104: pixel size of EH104.jpg in its world file EH104.jgw (0.000651113 m).
+^EH104_,0.6511
+# RAMA8 faces 4, 6 and 8: pixel size of the image in 20260709_RAMA8_FACE 4/6/8.dxf (drawn in metres).
+^F4_,1.8787
+^F6_,1.8735
+^F8_,1.9174
+# RAMA8 east and west faces: pixel size of the images in the 20260704 crack mapping DXFs.
+^RAMA8_EAST-,2.5
+^RAMA8_WEST-,1.9056
+# CRACK500, SUT, CFD and the phone photos have no known GSD and are left unknown.
